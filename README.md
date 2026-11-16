@@ -13,7 +13,7 @@ El proyecto se ejecuta por fases. Este README es a la vez la documentación y el
 | 1 | Dependencias, configuración, validación de entorno y bootstrap (health + Swagger) | ✅ Completada |
 | 2 | Entidad `Task`, conexión TypeORM y migraciones SQLite | ✅ Completada |
 | 3 | Esquemas Zod de entrada/salida y contrato HTTP | ✅ Completada |
-| 4 | Repositorio, servicio, controlador CRUD y filtros/paginación | ⏳ Pendiente |
+| 4 | Repositorio, servicio, controlador CRUD y filtros/paginación | ✅ Completada |
 | 5 | Tests unitarios y e2e | ⏳ Pendiente |
 | 6 | README final, Docker y despliegue a producción | ⏳ Pendiente |
 
@@ -46,7 +46,17 @@ El proyecto se ejecuta por fases. Este README es a la vez la documentación y el
 - Respuestas públicas tipadas: `taskResponseSchema`, `paginationMetaSchema` y `paginatedTasksResponseSchema`.
 - `src/tasks/tasks.schemas.spec.ts` con 15 tests de los esquemas.
 
-**Aún no implementado** (fases 4–6): endpoints de tareas, repositorio, servicio, filtros y paginación en ejecución, tests del CRUD y Docker. Las secciones siguientes describen el contrato y el plan completos.
+**Ya implementado en la Fase 4**
+
+- `TasksRepository`: `create`, `findById`, `findPage`, `save` y `deleteById` sobre el `Repository` de TypeORM.
+- `TasksService`: timestamps ISO, `NotFoundException`, cálculo de `meta` y mapeo explícito entidad → respuesta.
+- `TasksController`: `POST`, `GET` (lista), `GET :id`, `PATCH :id` y `DELETE :id` con los códigos `201`, `200`, `204`, `400` y `404`.
+- Filtros por `status` y `assignee` (sin distinguir mayúsculas en ASCII), orden `due_date ASC, id ASC` y paginación por `page`/`limit`.
+- `TasksModule` con `TypeOrmModule.forFeature([Task])`, conectado a `AppModule`.
+- Swagger genera el contrato desde los esquemas Zod: body del POST/PATCH, parámetros de query y de ruta, y respuestas `201`/`200`/`204`.
+- Verificación HTTP completa sobre una base temporal: 59 comprobaciones de CRUD, filtros, paginación, errores y OpenAPI.
+
+**Aún no implementado** (fases 5–6): tests unitarios del servicio, e2e del CRUD, Docker y despliegue. Las secciones siguientes describen el contrato y el plan completos.
 
 ---
 
@@ -125,7 +135,7 @@ curl -X POST http://localhost:3000/api/tasks \
 ### Ejemplo de listado
 
 ```bash
-curl "http://localhost:3000/api/tasks?status=pending&assignee=ana&page=1&limit=20"
+curl "http://localhost:3000/api/tasks?status=in_progress&assignee=ana&page=1&limit=20"
 ```
 
 ```json
@@ -135,7 +145,7 @@ curl "http://localhost:3000/api/tasks?status=pending&assignee=ana&page=1&limit=2
       "id": 1,
       "title": "Preparar informe",
       "description": "Cerrar el trimestre",
-      "status": "pending",
+      "status": "in_progress",
       "assignee": "Ana",
       "dueDate": "2026-12-01",
       "createdAt": "2026-11-16T12:00:00.000Z",
@@ -146,6 +156,22 @@ curl "http://localhost:3000/api/tasks?status=pending&assignee=ana&page=1&limit=2
 }
 ```
 
+### Comportamiento de los endpoints
+
+- **Crear:** `status` es opcional y por defecto `pending`; `description` es opcional y se guarda como `null` si se omite. `createdAt` y `updatedAt` se generan en el servidor con la misma marca ISO 8601 UTC.
+- **Listar:** devuelve `{ data, meta }`. El orden es `due_date ASC, id ASC`, estable cuando varias tareas comparten fecha. `meta.totalPages` es `ceil(total / limit)` y vale `0` si no hay tareas. Pedir una página posterior a la última devuelve `data: []` y conserva la página solicitada en `meta.page`.
+- **Consultar:** un id válido inexistente devuelve `404` con `"message": "No existe la tarea <id>"`.
+- **Actualizar:** solo cambia los campos presentes; `description: null` borra la descripción y omitirla la conserva. `updatedAt` se actualiza y `createdAt` no cambia.
+- **Eliminar:** responde `204` sin cuerpo; repetir el borrado devuelve `404`.
+
+```bash
+curl -X PATCH http://localhost:3000/api/tasks/1 \
+  -H "Content-Type: application/json" \
+  -d '{"status": "done"}'
+
+curl -i -X DELETE http://localhost:3000/api/tasks/1
+```
+
 ### Reglas de validación
 
 - `POST` y `PATCH` usan `z.strictObject`: los campos desconocidos devuelven `400`.
@@ -154,7 +180,7 @@ curl "http://localhost:3000/api/tasks?status=pending&assignee=ana&page=1&limit=2
 - `title` admite 1–200 caracteres, `assignee` 1–120 y `description` hasta 2000; los espacios sobrantes se recortan.
 - `page` y `limit` se convierten desde el query string; fuera de rango (`page < 1`, `limit < 1` o `limit > 100`) devuelven `400`, no se recortan en silencio.
 - El query de listado no es estricto: parámetros desconocidos se ignoran, para no romper enlaces con `utm_*` u otros añadidos por el cliente.
-- `assignee` se compara sin distinguir mayúsculas/minúsculas.
+- `assignee` se compara sin distinguir mayúsculas/minúsculas con `LOWER`, que en SQLite cubre ASCII; no normaliza acentos (ver decisiones).
 - `id` no numérico, `0` o negativo devuelve `400`; un id válido inexistente devuelve `404`.
 - Formato de error de Nest:
 
@@ -175,7 +201,7 @@ curl "http://localhost:3000/api/tasks?status=pending&assignee=ana&page=1&limit=2
 ```text
 src/
   main.ts                     # bootstrap de la aplicación
-  app.module.ts               # ConfigModule + TypeOrmModule (+ TasksModule en fase 4)
+  app.module.ts               # ConfigModule + TypeOrmModule + TasksModule
   app.setup.ts                # prefijo /api, pipe global, CORS, Swagger
   health.controller.ts        # GET /api/health
   config/
@@ -188,13 +214,13 @@ src/
     migrations/
       1794863403592-CreateTasks.ts
   tasks/
-    task.entity.ts            # entidad Task (fase 2)
-    tasks.schemas.ts          # esquemas Zod de entrada/salida (fase 3)
-    tasks.schemas.spec.ts     # tests de los esquemas (fase 3)
-    tasks.repository.ts       # (fase 4) acceso a datos
-    tasks.service.ts          # (fase 4) reglas de negocio
-    tasks.controller.ts       # (fase 4) endpoints
-    tasks.module.ts           # (fase 4) módulo
+    task.entity.ts            # entidad Task
+    tasks.schemas.ts          # esquemas Zod de entrada/salida
+    tasks.schemas.spec.ts     # tests de los esquemas
+    tasks.repository.ts       # acceso a datos y paginación
+    tasks.service.ts          # reglas de negocio y errores
+    tasks.controller.ts       # endpoints y documentación Swagger
+    tasks.module.ts           # módulo de tareas
 test/
   health.e2e-spec.ts          # e2e del health check
   tasks.e2e-spec.ts           # (fase 5) e2e del CRUD
@@ -308,6 +334,8 @@ En total, 18 tests unitarios y 1 e2e. Planificados en la Fase 5 (el requisito es
 
 Los e2e usan `DATABASE_URL=:memory:`, de modo que cada aplicación de test tiene su propia base y no hay estado compartido entre pruebas. La configuración de Vitest define esa variable antes de importar `AppModule`.
 
+La Fase 4 se verificó con un script HTTP temporal contra `dist/main.js` y una base SQLite de usar y tirar (59 comprobaciones); no se versionó. Los e2e permanentes del CRUD se añaden en la Fase 5.
+
 ---
 
 ## Variables de entorno
@@ -368,15 +396,17 @@ El arranque falla con un mensaje explícito si algún valor no es válido.
 
 **Nota de implementación:** en Zod 4 un `ZodDefault` ya cuenta como opcional, así que `createTaskSchema.partial()` conservaba el `status: 'pending'` y un PATCH sin estado habría reseteado tareas. Por eso los campos se declaran una vez y el `default` se aplica solo en el esquema de creación; hay un test que lo protege.
 
-### Fase 4 — Dominio y endpoints
+### Fase 4 — Dominio y endpoints ✅
 
-- [ ] `TasksRepository` con `create`, `findById`, `findPage`, `update` y `delete` usando `Repository`/`QueryBuilder`.
-- [ ] `TasksService` con reglas de negocio, `updatedAt`, `NotFoundException` y cálculo de `meta`.
-- [ ] `TasksController` con `201`, `200`, `204`, `400` y `404`.
-- [ ] Decoradores Swagger y ejemplos.
-- [ ] `TasksModule` conectado a `AppModule`.
+- [x] `TasksRepository` con `create`, `findById`, `findPage`, `save` y `deleteById` usando `Repository`/`QueryBuilder`.
+- [x] `TasksService` con reglas de negocio, `updatedAt`, `NotFoundException` y cálculo de `meta`.
+- [x] `TasksController` con `201`, `200`, `204`, `400` y `404`.
+- [x] Decoradores Swagger y ejemplos.
+- [x] `TasksModule` conectado a `AppModule`.
 
-**Verificación:** CRUD completo por `curl` y desde `/docs`; filtros y paginación combinados.
+**Verificación:** script HTTP contra `dist/main.js` y una base SQLite temporal: 59 comprobaciones correctas de CRUD, filtros combinados, orden, paginación (incluida página fuera de rango), errores `400`/`404`, `204` sin cuerpo y OpenAPI (`requestBody`, parámetros de query y de ruta, y esquemas de respuesta).
+
+**Nota de implementación:** el controlador declara los esquemas en los parámetros (`@Body({ schema })`, `@Query({ schema })`, `@Param('id', { schema })`). El pipe global valida y transforma, y Swagger 12 reutiliza esos mismos esquemas para generar el contrato; no hay DTOs ni decoradores `@ApiProperty` duplicados. La consulta de `assignee` usa `LOWER(...) = LOWER(...)` porque SQLite no tiene `ILIKE`.
 
 ### Fase 5 — Tests
 
@@ -505,9 +535,13 @@ TypeORM 1.x eliminó el driver `sqlite3` y usa `better-sqlite3` por defecto. Su 
 
 Cero infraestructura, un archivo, transacciones ACID y suficiente rendimiento para una API de tareas. A cambio: un solo escritor, sin réplicas, y el backup es responsabilidad del despliegue. El código aísla el acceso en un repositorio, así que cambiar a PostgreSQL es acotado.
 
+### Repositorio, servicio y controlador separados
+
+El repositorio concentra TypeORM y el SQL (filtros, orden, `skip`/`take`); el servicio aplica reglas de negocio (timestamps, `404`, `meta`) y mapea la entidad a la respuesta pública; el controlador solo declara rutas, esquemas y códigos HTTP. La separación permite probar el servicio con el repositorio mockeado y cambiar la persistencia sin tocar el contrato. El coste es una capa más de indirección para un CRUD pequeño, que se compensa con tests y mantenimiento más simples.
+
 ### Zod y `StandardSchemaValidationPipe` en lugar de DTOs con `class-validator`
 
-Un único esquema produce validación runtime y tipos estáticos, sin duplicar clases ni depender de `emitDecoratorMetadata` para validar. Nest 12 integra Standard Schema de forma nativa y Swagger genera el OpenAPI desde Zod 4.2+. El coste es que el ecosistema de decoradores de Swagger (`@ApiProperty`) no se usa en los DTOs; los esquemas se documentan solos.
+Un único esquema produce validación runtime y tipos estáticos, sin duplicar clases ni depender de `emitDecoratorMetadata` para validar. Nest 12 integra Standard Schema de forma nativa y Swagger genera el OpenAPI desde Zod 4.2+: el esquema declarado en `@Body({ schema })`, `@Query({ schema })` o `@Param(..., { schema })` se convierte a OpenAPI 3.0 mediante Standard JSON Schema, así que el contrato documentado y el validado son el mismo. El coste es que el ecosistema de decoradores de Swagger (`@ApiProperty`) no se usa en los DTOs; los esquemas se documentan solos.
 
 ### `default` en creación y `partial()` en actualización
 
@@ -525,9 +559,13 @@ SQLite no tiene un tipo `DATE`. Guardar `YYYY-MM-DD` para `dueDate` y timestamps
 
 El enunciado pide un responsable, no autenticación ni gestión de usuarios. Un campo de texto validado mantiene el alcance pequeño. Si se añaden usuarios, se creará `users` y una FK `assignee_id`, con migración de datos.
 
+### Filtro de `assignee` con `LOWER`
+
+SQLite no tiene `ILIKE`, y su `LIKE`/`COLLATE NOCASE` tampoco distinguen mayúsculas fuera de ASCII. El filtro usa `LOWER(task.assignee) = LOWER(:assignee)`, que es explícito y portable, pero solo cubre ASCII: `ANA` encuentra `Ana`, mientras que `JOSÉ` no encontraría `José` con tilde distinta. Para ese caso haría falta guardar una columna normalizada (por ejemplo, sin acentos y en minúsculas) o usar FTS; se deja fuera del alcance actual y documentado.
+
 ### Paginación por offset
 
-`page`/`limit` es fácil de consumir y de documentar. Con millones de filas, el offset profundo se vuelve lento; el siguiente paso sería paginación por cursor (`due_date`, `id`).
+`page`/`limit` es fácil de consumir y de documentar. El orden es `due_date ASC, id ASC`: la fecha límite es lo más útil para una lista de tareas y el id desempata para que la paginación sea estable. `totalPages` es `ceil(total / limit)` (0 sin tareas) y una página posterior a la última devuelve `data: []` sin error. Con millones de filas, el offset profundo se vuelve lento; el siguiente paso sería paginación por cursor (`due_date`, `id`).
 
 ### Errores con el formato de Nest
 
@@ -553,7 +591,7 @@ No hay login ni permisos: cualquiera con acceso a la API puede operar. Es una de
 
 ## Próximos pasos
 
-1. Terminar las fases 4–6 del plan.
+1. Terminar las fases 5–6 del plan.
 2. Añadir autenticación y una tabla `users` si el responsable debe ser un usuario real.
 3. Añadir `GET /api/tasks/stats` y recordatorios por fecha límite (scheduler + email).
 4. CI (lint, build y tests en cada push) y publicación de la imagen Docker.
