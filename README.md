@@ -11,7 +11,7 @@ El proyecto se ejecuta por fases. Este README es a la vez la documentación y el
 | Fase | Contenido | Estado |
 | --- | --- | --- |
 | 1 | Dependencias, configuración, validación de entorno y bootstrap (health + Swagger) | ✅ Completada |
-| 2 | Entidad `Task`, conexión TypeORM y migraciones SQLite | ⏳ Pendiente |
+| 2 | Entidad `Task`, conexión TypeORM y migraciones SQLite | ✅ Completada |
 | 3 | Esquemas Zod de entrada/salida y contrato HTTP | ⏳ Pendiente |
 | 4 | Repositorio, servicio, controlador CRUD y filtros/paginación | ⏳ Pendiente |
 | 5 | Tests unitarios y e2e | ⏳ Pendiente |
@@ -25,7 +25,17 @@ El proyecto se ejecuta por fases. Este README es a la vez la documentación y el
 - `GET /api/health` y documentación OpenAPI en `/docs`.
 - Tests de configuración y e2e del health check.
 
-**Aún no implementado** (fases 2–6): entidad, base de datos, endpoints de tareas, migraciones, Docker y el resto de tests. Las secciones siguientes describen el contrato y el plan completos.
+**Ya implementado en la Fase 2**
+
+- Entidad `Task` con tipos de columna explícitos, CHECK de estado e índices.
+- `buildDataSourceOptions()` compartido por la app y por el CLI de TypeORM.
+- `DatabaseModule` con `TypeOrmModule.forRootAsync`, `synchronize: false` y `migrationsRun` según `DB_AUTO_MIGRATE`.
+- SQLite con WAL, `busy_timeout` de 5 s y creación automática de `data/`.
+- Migración inicial `CreateTasks` generada, revisada y aplicada.
+- Scripts `db:migration:generate`, `db:migration:run`, `db:migration:revert` y `db:migration:show`.
+- Health check que consulta la base de datos (`SELECT 1`).
+
+**Aún no implementado** (fases 3–6): endpoints de tareas, validación de entrada, filtros, paginación, tests del CRUD y Docker. Las secciones siguientes describen el contrato y el plan completos.
 
 ---
 
@@ -66,6 +76,8 @@ Tabla `tasks`:
 
 Índices previstos: `status`, `assignee` y `due_date`. Orden por defecto: `due_date ASC, id ASC`.
 
+La migración inicial crea además un `CHECK` de base de datos para `status` (`IN ('pending','in_progress','done')`), de modo que la integridad no depende solo de Zod.
+
 Equivalencias de estado: `pending` → pendiente, `in_progress` → en curso, `done` → hecha.
 
 Las migraciones se guardan en `src/db/migrations/` y se registran en la tabla `migrations` de TypeORM.
@@ -83,7 +95,7 @@ Prefijo global: `/api`. Swagger UI: `/docs`. OpenAPI JSON: `/docs/json`.
 | `GET` | `/api/tasks/:id` | `200` + tarea | `400` id inválido, `404` |
 | `PATCH` | `/api/tasks/:id` | `200` + tarea actualizada | `400`, `404` |
 | `DELETE` | `/api/tasks/:id` | `204` sin cuerpo | `400`, `404` |
-| `GET` | `/api/health` | `200` + estado | — |
+| `GET` | `/api/health` | `200` + estado y comprobación de la base de datos | — |
 
 ### Ejemplo de creación
 
@@ -141,6 +153,8 @@ curl "http://localhost:3000/api/tasks?status=pending&assignee=ana&page=1&limit=2
 }
 ```
 
+`GET /api/health` devuelve `{ "status": "ok", "database": "up", "uptime": ..., "timestamp": ... }` y responde `500` si la base de datos no contesta.
+
 ---
 
 ## Estructura del proyecto
@@ -154,17 +168,19 @@ src/
   config/
     env.ts                    # esquema Zod de variables de entorno
     env.spec.ts               # tests de la configuración
-  db/                         # (fase 2) data source, entidad y migraciones
-    data-source.ts
-    data-source-options.ts
+  db/
+    data-source-options.ts    # opciones compartidas por app y CLI
+    data-source.ts            # DataSource del CLI de TypeORM
+    database.module.ts        # TypeOrmModule.forRootAsync
     migrations/
-  tasks/                      # (fases 3–4) entidad, schemas, repositorio, servicio y controlador
-    task.entity.ts
-    tasks.schemas.ts
-    tasks.repository.ts
-    tasks.service.ts
-    tasks.controller.ts
-    tasks.module.ts
+      1794863403592-CreateTasks.ts
+  tasks/
+    task.entity.ts            # entidad Task (fase 2)
+    tasks.schemas.ts          # (fase 3) esquemas Zod
+    tasks.repository.ts       # (fase 4) acceso a datos
+    tasks.service.ts          # (fase 4) reglas de negocio
+    tasks.controller.ts       # (fase 4) endpoints
+    tasks.module.ts           # (fase 4) módulo
 test/
   health.e2e-spec.ts          # e2e del health check
   tasks.e2e-spec.ts           # (fase 5) e2e del CRUD
@@ -215,25 +231,35 @@ npm run start:dev
 | `npm run test:cov` | Cobertura. |
 | `npm run lint` | oxlint con comprobación de tipos. |
 | `npm run format` | Prettier sobre `src/` y `test/`. |
-| `npm run db:migration:generate -- src/db/migrations/Nombre` | (Fase 2) Genera una migración a partir del diff entre entidades y base de datos. |
-| `npm run db:migration:run` | (Fase 2) Aplica migraciones pendientes. |
-| `npm run db:migration:revert` | (Fase 2) Revierte la última migración. |
-| `npm run db:migration:show` | (Fase 2) Lista migraciones y su estado. |
+| `npm run db:migration:generate -- src/db/migrations/Nombre` | Genera una migración a partir del diff entre entidades y base de datos. |
+| `npm run db:migration:run` | Aplica migraciones pendientes. |
+| `npm run db:migration:revert` | Revierte la última migración. |
+| `npm run db:migration:show` | Lista migraciones y su estado. |
 
 ---
 
 ## Migraciones
 
-`synchronize` **siempre está desactivado**: el esquema cambia solo mediante migraciones versionadas. El flujo previsto (Fase 2) es:
+`synchronize` **siempre está desactivado**: el esquema cambia solo mediante migraciones versionadas. El flujo es:
 
 ```bash
 # 1. Cambiar la entidad y generar el SQL
 npm run db:migration:generate -- src/db/migrations/AddTaskPriority
 
 # 2. Revisar el archivo generado en src/db/migrations/
-# 3. Aplicarlo
+# 3. Registrarlo en el array `migrations` de src/db/data-source-options.ts
+# 4. Aplicarlo
 npm run db:migration:run
+
+# 5. Comprobar el estado
+npm run db:migration:show
 ```
+
+Las migraciones se registran de forma explícita (`migrations: [CreateTasks1794863403592, ...]`) en lugar de usar un glob. Con un glob, Vitest acabaría cargando el `.ts` con el loader nativo de Node en vez de transformarlo, y en `dist/` hay que apuntar al `.js`; la lista explícita funciona igual en fuente, tests y producción, a cambio de añadir una línea por migración.
+
+Al generar una migración nueva, cambiar el import a `import type { MigrationInterface, QueryRunner } from 'typeorm'` (TypeORM lo genera como import de valor): el proyecto es ESM y esos símbolos son solo tipos.
+
+La migración inicial `CreateTasks` crea la tabla `tasks`, el `CHECK` de `status` y los tres índices. Se aplicó con `npm run db:migration:run` y quedó registrada en la tabla `migrations`; el archivo local vive en `data/todo.sqlite` (ignorado por git).
 
 Al arrancar, la aplicación aplica las migraciones pendientes si `DB_AUTO_MIGRATE=true` (`migrationsRun`). Con una sola instancia es cómodo y seguro. Con varias instancias, ponerlo en `false` y ejecutar `npm run db:migration:run` como paso del release, para que solo un proceso migre.
 
@@ -246,7 +272,7 @@ Las migraciones se generan con `--esm` porque el proyecto es ESM. El CLI se ejec
 Estado actual:
 
 - `src/config/env.spec.ts`: valores por defecto, coerción de `PORT` y `DB_AUTO_MIGRATE`, y error claro ante variables inválidas.
-- `test/health.e2e-spec.ts`: arranca la app real y verifica `GET /api/health`.
+- `test/health.e2e-spec.ts`: arranca la app real con SQLite en memoria, aplica las migraciones y verifica `GET /api/health` (incluida la consulta a la base de datos).
 
 Planificados en la Fase 5 (el requisito es un mínimo de 3 tests):
 
@@ -299,18 +325,20 @@ El arranque falla con un mensaje explícito si algún valor no es válido.
 
 **Verificación:** `npm run build`, `npm test`, `npm run test:e2e` y `npm run lint` pasan; `/api/health` y `/docs` responden.
 
-### Fase 2 — Persistencia y migraciones
+### Fase 2 — Persistencia y migraciones ✅
 
-- [ ] Crear `Task` con decoradores de TypeORM y **tipos de columna explícitos** (los tests con esbuild no emiten `design:type`).
-- [ ] Definir `data-source-options.ts` reutilizable por la app y por el CLI.
-- [ ] Crear `data-source.ts` para el CLI, cargando `.env` con `process.loadEnvFile()`.
-- [ ] Configurar `TypeOrmModule.forRootAsync` con `synchronize: false` y `migrationsRun` según `DB_AUTO_MIGRATE`.
-- [ ] Crear la carpeta `data/` al arrancar y aplicar PRAGMAs (`journal_mode=WAL`, `busy_timeout`, `foreign_keys=ON`).
-- [ ] Añadir scripts `db:migration:*`.
-- [ ] Generar y revisar la migración inicial `CreateTasks`.
-- [ ] Test rápido de conexión/migración.
+- [x] Crear `Task` con decoradores de TypeORM y **tipos de columna explícitos** (los tests con esbuild no emiten `design:type`).
+- [x] Definir `data-source-options.ts` reutilizable por la app y por el CLI.
+- [x] Crear `data-source.ts` para el CLI, cargando `.env` con `process.loadEnvFile()`.
+- [x] Configurar `TypeOrmModule.forRootAsync` con `synchronize: false` y `migrationsRun` según `DB_AUTO_MIGRATE`.
+- [x] Crear la carpeta `data/` al arrancar, activar WAL y fijar un `busy_timeout` de 5 s (`better-sqlite3` activa las claves foráneas por defecto).
+- [x] Añadir scripts `db:migration:*`.
+- [x] Generar y revisar la migración inicial `CreateTasks` (tabla, CHECK e índices).
+- [x] Verificar conexión y migración: e2e con SQLite en memoria y arranque desde `dist/` con una base nueva.
 
-**Verificación:** `npm run db:migration:run` crea `tasks` y `migrations`; el arranque no usa `synchronize`.
+**Verificación:** `npm run db:migration:show` marca la migración como ejecutada; `npm run db:migration:run` sobre una base limpia crea `tasks` y `migrations`; el e2e y el arranque desde `dist/` responden `database: "up"`.
+
+**Nota de implementación:** las migraciones se importan de forma estática y se registran en el array `migrations` de `data-source-options.ts`. Un glob habría cargado el `.ts` con el loader nativo de Node durante Vitest, en lugar de transformarlo como el resto del proyecto.
 
 ### Fase 3 — Validación y contrato
 
@@ -484,13 +512,17 @@ El enunciado pide un responsable, no autenticación ni gestión de usuarios. Un 
 
 `400` por validación, `404` por recurso inexistente y `204` al borrar. Se usa el formato estándar de Nest (`statusCode`, `message`, `error`) para no inventar un contrato propio y mantener Swagger y los clientes alineados.
 
+### Estados: Zod y CHECK en la base de datos
+
+La API valida `status` con Zod, pero la tabla también lleva un `CHECK` (`IN ('pending','in_progress','done')`). La validación de aplicación da mensajes útiles y la restricción de base de datos protege ante escrituras manuales o scripts futuros. El coste es tener que crear una migración si algún día se añade un estado nuevo.
+
 ### `synchronize: false`
 
 Nunca se modifica el esquema automáticamente, ni en desarrollo. Las migraciones son la única fuente de verdad y se revisan antes de aplicarse; así se evita el riesgo clásico de pérdida de datos de `synchronize: true`.
 
-### ESM y CLI de TypeORM
+### ESM, CLI de TypeORM y migraciones explícitas
 
-El proyecto es ESM (`"type": "module"`, imports con `.js`). El CLI de TypeORM se ejecuta con `tsx` y las migraciones se generan con `--esm`, sin `ts-node` ni una compilación previa. En tiempo de ejecución, TypeORM carga las migraciones compiladas de `dist/db/migrations`.
+El proyecto es ESM (`"type": "module"`, imports con `.js`). El CLI de TypeORM se ejecuta con `tsx` y las migraciones se generan con `--esm`, sin `ts-node` ni una compilación previa. Las migraciones se importan de forma estática y se listan en `data-source-options.ts`: un glob hacía que Vitest cargara el `.ts` con el loader nativo de Node, que no resuelve los tipos de TypeORM como valores. La lista explícita funciona igual en `src/`, en Vitest y en `dist/`. En tiempo de ejecución, TypeORM carga las migraciones compiladas de `dist/db/migrations`.
 
 ### Sin autenticación (fuera de alcance)
 
@@ -500,7 +532,7 @@ No hay login ni permisos: cualquiera con acceso a la API puede operar. Es una de
 
 ## Próximos pasos
 
-1. Terminar las fases 2–6 del plan.
+1. Terminar las fases 3–6 del plan.
 2. Añadir autenticación y una tabla `users` si el responsable debe ser un usuario real.
 3. Añadir `GET /api/tasks/stats` y recordatorios por fecha límite (scheduler + email).
 4. CI (lint, build y tests en cada push) y publicación de la imagen Docker.

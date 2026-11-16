@@ -18,7 +18,8 @@ export function setupApp(app: INestApplication): void {
   app.useGlobalPipes(new StandardSchemaValidationPipe());
 
   app.enableCors({
-    origin: corsOrigin === '*' ? '*' : corsOrigin.split(',').map((o) => o.trim()),
+    origin:
+      corsOrigin === '*' ? '*' : corsOrigin.split(',').map((o) => o.trim()),
   });
   app.enableShutdownHooks();
 

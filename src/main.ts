@@ -12,7 +12,10 @@ async function bootstrap(): Promise<void> {
   await app.listen(port);
 
   Logger.log(`API disponible en http://localhost:${port}/api`, 'Bootstrap');
-  Logger.log(`OpenAPI disponible en http://localhost:${port}/docs`, 'Bootstrap');
+  Logger.log(
+    `OpenAPI disponible en http://localhost:${port}/docs`,
+    'Bootstrap',
+  );
 }
 
 await bootstrap();

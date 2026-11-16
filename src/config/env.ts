@@ -31,8 +31,7 @@ export function parseEnv(source: Record<string, unknown> = process.env): Env {
   if (!result.success) {
     const details = result.error.issues
       .map(
-        (issue) =>
-          `  - ${issue.path.join('.') || '(raíz)'}: ${issue.message}`,
+        (issue) => `  - ${issue.path.join('.') || '(raíz)'}: ${issue.message}`,
       )
       .join('\n');
 
