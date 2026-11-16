@@ -15,7 +15,7 @@ El proyecto se ejecuta por fases. Este README es a la vez la documentación y el
 | 3 | Esquemas Zod de entrada/salida y contrato HTTP | ✅ Completada |
 | 4 | Repositorio, servicio, controlador CRUD y filtros/paginación | ✅ Completada |
 | 4.1 | Ejemplos de peticiones de todos los endpoints en el README | ✅ Completada |
-| 5 | Tests unitarios y e2e | ⏳ Pendiente |
+| 5 | Tests unitarios y e2e | ✅ Completada |
 | 6 | README final, Docker y despliegue a producción | ⏳ Pendiente |
 
 **Ya implementado en la Fase 1**
@@ -65,7 +65,14 @@ El proyecto se ejecuta por fases. Este README es a la vez la documentación y el
 - Equivalentes en PowerShell con `Invoke-RestMethod`, incluida la nota sobre `curl.exe`.
 - Solo se modificó `README.md`; no hay cambios de código en esta fase.
 
-**Aún no implementado** (fases 5–6): tests unitarios del servicio, e2e del CRUD, Docker y despliegue. Las secciones siguientes describen el contrato y el plan completos.
+**Ya implementado en la Fase 5**
+
+- `src/tasks/tasks.service.spec.ts`: 11 tests unitarios del servicio con el repositorio mockeado con `vi.fn()`.
+- `test/tasks.e2e-spec.ts`: 12 tests e2e sobre la app real y SQLite `:memory:`, uno por cada comportamiento del contrato.
+- La base se reinicia en `beforeEach` y se siembran tres tareas sin suponer ids fijos, así que los tests no comparten estado ni dependen del orden.
+- Total del proyecto: **29 tests unitarios y 13 e2e**, todos en verde.
+
+**Aún no implementado** (fase 6): Docker, despliegue a producción y cierre del README. Las secciones siguientes describen el contrato y el plan completos.
 
 ---
 
@@ -508,11 +515,12 @@ src/
     tasks.schemas.spec.ts     # tests de los esquemas
     tasks.repository.ts       # acceso a datos y paginación
     tasks.service.ts          # reglas de negocio y errores
+    tasks.service.spec.ts     # tests unitarios del servicio
     tasks.controller.ts       # endpoints y documentación Swagger
     tasks.module.ts           # módulo de tareas
 test/
   health.e2e-spec.ts          # e2e del health check
-  tasks.e2e-spec.ts           # (fase 5) e2e del CRUD
+  tasks.e2e-spec.ts           # e2e del CRUD
 ```
 
 ---
@@ -598,32 +606,52 @@ Las migraciones se generan con `--esm` porque el proyecto es ESM. El CLI se ejec
 
 ## Tests
 
-Estado actual:
+El requisito era un mínimo de 3 tests; el proyecto tiene **29 unitarios y 13 e2e (42 en total)**.
 
-- `src/config/env.spec.ts`: valores por defecto, coerción de `PORT` y `DB_AUTO_MIGRATE`, y error claro ante variables inválidas.
-- `src/tasks/tasks.schemas.spec.ts`: 15 tests de creación, actualización, query de listado, id y respuesta pública.
-- `test/health.e2e-spec.ts`: arranca la app real con SQLite en memoria, aplica las migraciones y verifica `GET /api/health` (incluida la consulta a la base de datos).
+### Unitarios — `npm test`
 
-En total, 18 tests unitarios y 1 e2e. Planificados en la Fase 5 (el requisito es un mínimo de 3 tests):
+| Archivo | Tests | Cubre |
+| --- | --- | --- |
+| `src/config/env.spec.ts` | 3 | Valores por defecto, coerción de `PORT`/`DB_AUTO_MIGRATE` y error claro ante variables inválidas. |
+| `src/tasks/tasks.schemas.spec.ts` | 15 | Creación, actualización, query de listado, id y respuesta pública. |
+| `src/tasks/tasks.service.spec.ts` | 11 | Reglas de negocio con el repositorio mockeado. |
 
-**Unitarios** (`tasks.service.spec.ts`, repositorio mockeado con `vi.fn()`):
+`tasks.service.spec.ts` usa `vi.fn()` y `vi.useFakeTimers()` para fijar el reloj:
 
-1. Crea una tarea con estado por defecto y timestamps.
-2. Propaga filtros y paginación al repositorio.
-3. Lanza `NotFoundException` al consultar una tarea inexistente.
-4. Lanza `NotFoundException` al actualizar o borrar una tarea inexistente.
-5. Calcula `totalPages` correctamente, incluida una página vacía.
+1. `create` guarda `description: null` cuando se omite y genera `createdAt`/`updatedAt` con la misma marca.
+2. `create` conserva la descripción y el estado cuando se envían.
+3. `findOne` devuelve la tarea mapeada.
+4. `findOne` lanza `NotFoundException` con el id en el mensaje.
+5. `findPage` propaga los filtros y la paginación al repositorio.
+6. `findPage` calcula `totalPages` (`ceil(total / limit)`).
+7. `findPage` devuelve `totalPages: 0` sin tareas.
+8. `update` aplica solo los campos enviados y avanza `updatedAt`.
+9. `update` borra la descripción con `null`.
+10. `update` lanza `404` sin llamar a `save` si la tarea no existe.
+11. `remove` elimina y lanza `404` cuando no se afectó ninguna fila.
 
-**E2E** (`tasks.e2e-spec.ts`, app real + SQLite en memoria migrado):
+### E2E — `npm run test:e2e`
 
-6. CRUD completo: `201` → `200` → `200` → `204` → `404`.
-7. `400` por body inválido, campo desconocido e id no numérico.
-8. Filtros combinados por `status` y `assignee` (sin distinguir mayúsculas).
-9. Paginación: `limit`, `page`, `total` y `totalPages`.
+`test/tasks.e2e-spec.ts` arranca la app real con `DATABASE_URL=:memory:`, aplica las migraciones y siembra tres tareas en `beforeEach`:
 
-Los e2e usan `DATABASE_URL=:memory:`, de modo que cada aplicación de test tiene su propia base y no hay estado compartido entre pruebas. La configuración de Vitest define esa variable antes de importar `AppModule`.
+1. `POST` crea con estado por defecto, recorta espacios y genera timestamps ISO.
+2. `POST` rechaza campos desconocidos, fechas imposibles, estados inválidos y títulos vacíos.
+3. `GET` lista ordenado por `dueDate` e `id`, con `meta` correcta.
+4. `GET` filtra por `status` y `assignee`, sin distinguir mayúsculas en ASCII.
+5. `GET` pagina con `limit`, `total` y `totalPages`, incluida una página fuera de rango.
+6. `GET /:id` devuelve la tarea creada.
+7. `GET /:id` responde `404` si no existe y `400` con ids inválidos.
+8. `PATCH` cambia solo lo enviado y conserva `createdAt`.
+9. `PATCH` borra la descripción con `null` y rechaza cuerpo vacío o con campos desconocidos.
+10. `PATCH` responde `404` si la tarea no existe.
+11. `DELETE` responde `204` sin cuerpo y `404` al repetir.
+12. `GET` rechaza filtros y paginación inválidos (`limit=101`, `page=0`, estado inexistente).
 
-La Fase 4 se verificó con un script HTTP temporal contra `dist/main.js` y una base SQLite de usar y tirar (59 comprobaciones); no se versionó. Los e2e permanentes del CRUD se añaden en la Fase 5.
+`test/health.e2e-spec.ts` verifica `GET /api/health`, incluida la consulta a la base de datos.
+
+Las dos suites e2e usan `DATABASE_URL=:memory:` y `DB_AUTO_MIGRATE=true` definidos en `vitest.config.e2e.ts`, antes de importar `AppModule`. Cada archivo de test crea su propia aplicación y base, y `beforeEach` limpia `tasks`, así que no hay estado compartido ni dependencia del orden. Los ids se toman de las respuestas, no se hardcodean.
+
+La Fase 4 se verificó además con un script HTTP temporal contra `dist/main.js` y una base SQLite de usar y tirar (59 comprobaciones); no se versionó porque los e2e permanentes cubren el mismo contrato.
 
 ---
 
@@ -681,7 +709,7 @@ El arranque falla con un mensaje explícito si algún valor no es válido.
 - [x] `taskIdSchema` y esquema de respuesta pública (`taskResponseSchema`, `paginatedTasksResponseSchema`).
 - [x] Documentar códigos `400` y `404` esperados.
 
-**Verificación:** `npm test` valida los 15 casos de los esquemas (valores por defecto, recorte, fechas imposibles, estados inválidos, campos desconocidos, `PATCH` vacío, coerción de query e ids). La traducción a `400` con un mensaje por campo la hace `StandardSchemaValidationPipe` (formato `campo: mensaje`), y se comprobará por HTTP en los e2e de la Fase 5.
+**Verificación:** `npm test` valida los 15 casos de los esquemas (valores por defecto, recorte, fechas imposibles, estados inválidos, campos desconocidos, `PATCH` vacío, coerción de query e ids). La traducción a `400` con un mensaje por campo la hace `StandardSchemaValidationPipe` (formato `campo: mensaje`), y los e2e de la Fase 5 lo comprueban por HTTP.
 
 **Nota de implementación:** en Zod 4 un `ZodDefault` ya cuenta como opcional, así que `createTaskSchema.partial()` conservaba el `status: 'pending'` y un PATCH sin estado habría reseteado tareas. Por eso los campos se declaran una vez y el `default` se aplica solo en el esquema de creación; hay un test que lo protege.
 
@@ -709,14 +737,16 @@ El arranque falla con un mensaje explícito si algún valor no es válido.
 
 **Verificación:** los ejemplos se contrastaron con el comportamiento real de la Fase 4 (códigos, orden, `meta`, campos opcionales y mensajes de error). Esta fase solo modifica `README.md`; `build`, `lint` y los tests no cambian.
 
-### Fase 5 — Tests
+### Fase 5 — Tests ✅
 
-- [ ] Unitarios del servicio con repositorio mockeado (`vi.fn()`).
-- [ ] E2E del CRUD, validación, filtros y paginación con SQLite `:memory:`.
-- [ ] Configurar `test.env` en `vitest.config.e2e.ts`.
-- [ ] Cobertura mínima razonable del servicio y del controlador.
+- [x] Unitarios del servicio con repositorio mockeado (`vi.fn()`): `src/tasks/tasks.service.spec.ts` con 11 tests.
+- [x] E2E del CRUD, validación, filtros y paginación con SQLite `:memory:`: `test/tasks.e2e-spec.ts` con 12 tests.
+- [x] `test.env` en `vitest.config.e2e.ts` (`DATABASE_URL=:memory:`, `DB_AUTO_MIGRATE=true`, `NODE_ENV=test`); ya estaba configurado desde la Fase 1.
+- [x] Cobertura del servicio con unitarios y del controlador por HTTP en los e2e (códigos, cuerpos y errores).
 
-**Verificación:** `npm test` y `npm run test:e2e` pasan; se suman a los 18 tests unitarios y al e2e de health ya existentes.
+**Verificación:** `npm test` → 29 tests en 3 archivos; `npm run test:e2e` → 13 tests en 2 archivos. Ambos en verde, junto con `npm run build` y `npm run lint` sin avisos.
+
+**Nota de implementación:** los e2e reinician la tabla en `beforeEach` con `DELETE FROM "tasks"` sobre el `DataSource` de la app y siembran tres tareas; los ids se leen de las respuestas porque `AUTOINCREMENT` no se reinicia. Los unitarios usan `vi.useFakeTimers()` para fijar los timestamps y `cloneTask()` para que el repositorio mockeado nunca devuelva la misma instancia entre pruebas.
 
 ### Fase 6 — README, Docker y producción
 
@@ -892,7 +922,7 @@ No hay login ni permisos: cualquiera con acceso a la API puede operar. Es una de
 
 ## Próximos pasos
 
-1. Terminar las fases 5–6 del plan.
+1. Terminar la fase 6 del plan: `Dockerfile`, `.dockerignore`, `docker-compose.yml` y verificación del contenedor.
 2. Añadir autenticación y una tabla `users` si el responsable debe ser un usuario real.
 3. Añadir `GET /api/tasks/stats` y recordatorios por fecha límite (scheduler + email).
 4. CI (lint, build y tests en cada push) y publicación de la imagen Docker.
