@@ -55,5 +55,12 @@ pids
 *.seed
 *.pid.lock
 
+# SQLite (base de datos local; las migraciones sí se versionan)
+/data
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
