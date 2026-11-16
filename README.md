@@ -12,7 +12,7 @@ El proyecto se ejecuta por fases. Este README es a la vez la documentación y el
 | --- | --- | --- |
 | 1 | Dependencias, configuración, validación de entorno y bootstrap (health + Swagger) | ✅ Completada |
 | 2 | Entidad `Task`, conexión TypeORM y migraciones SQLite | ✅ Completada |
-| 3 | Esquemas Zod de entrada/salida y contrato HTTP | ⏳ Pendiente |
+| 3 | Esquemas Zod de entrada/salida y contrato HTTP | ✅ Completada |
 | 4 | Repositorio, servicio, controlador CRUD y filtros/paginación | ⏳ Pendiente |
 | 5 | Tests unitarios y e2e | ⏳ Pendiente |
 | 6 | README final, Docker y despliegue a producción | ⏳ Pendiente |
@@ -35,7 +35,18 @@ El proyecto se ejecuta por fases. Este README es a la vez la documentación y el
 - Scripts `db:migration:generate`, `db:migration:run`, `db:migration:revert` y `db:migration:show`.
 - Health check que consulta la base de datos (`SELECT 1`).
 
-**Aún no implementado** (fases 3–6): endpoints de tareas, validación de entrada, filtros, paginación, tests del CRUD y Docker. Las secciones siguientes describen el contrato y el plan completos.
+**Ya implementado en la Fase 3**
+
+- `src/tasks/tasks.schemas.ts`: `createTaskSchema`, `updateTaskSchema`, `listTasksQuerySchema`, `taskIdSchema` y los esquemas de respuesta con sus tipos `z.infer`.
+- Creación y actualización con `z.strictObject` (campos desconocidos → `400`) y `description` opcional o nula.
+- `status` validado contra `TASK_STATUSES`; `dueDate` con `z.iso.date()`, que rechaza fechas inexistentes como `2026-02-30`.
+- `PATCH` parcial que exige al menos un campo y **no inyecta** el `status` por defecto.
+- Filtros y paginación con coerción desde el query string: `page ≥ 1`, `limit` entre 1 y 100, valores por defecto 1 y 20.
+- `taskIdSchema` convierte el `id` de la ruta y rechaza `0`, negativos y texto.
+- Respuestas públicas tipadas: `taskResponseSchema`, `paginationMetaSchema` y `paginatedTasksResponseSchema`.
+- `src/tasks/tasks.schemas.spec.ts` con 15 tests de los esquemas.
+
+**Aún no implementado** (fases 4–6): endpoints de tareas, repositorio, servicio, filtros y paginación en ejecución, tests del CRUD y Docker. Las secciones siguientes describen el contrato y el plan completos.
 
 ---
 
@@ -138,9 +149,11 @@ curl "http://localhost:3000/api/tasks?status=pending&assignee=ana&page=1&limit=2
 ### Reglas de validación
 
 - `POST` y `PATCH` usan `z.strictObject`: los campos desconocidos devuelven `400`.
-- `PATCH` es parcial pero exige al menos un campo; un cuerpo vacío devuelve `400`.
+- `PATCH` es parcial pero exige al menos un campo; un cuerpo vacío devuelve `400` y los campos omitidos no se tocan (el `status` por defecto solo se aplica al crear).
 - `status` solo admite los tres valores del dominio.
+- `title` admite 1–200 caracteres, `assignee` 1–120 y `description` hasta 2000; los espacios sobrantes se recortan.
 - `page` y `limit` se convierten desde el query string; fuera de rango (`page < 1`, `limit < 1` o `limit > 100`) devuelven `400`, no se recortan en silencio.
+- El query de listado no es estricto: parámetros desconocidos se ignoran, para no romper enlaces con `utm_*` u otros añadidos por el cliente.
 - `assignee` se compara sin distinguir mayúsculas/minúsculas.
 - `id` no numérico, `0` o negativo devuelve `400`; un id válido inexistente devuelve `404`.
 - Formato de error de Nest:
@@ -162,7 +175,7 @@ curl "http://localhost:3000/api/tasks?status=pending&assignee=ana&page=1&limit=2
 ```text
 src/
   main.ts                     # bootstrap de la aplicación
-  app.module.ts               # ConfigModule + TypeOrmModule + TasksModule (fases 1–2)
+  app.module.ts               # ConfigModule + TypeOrmModule (+ TasksModule en fase 4)
   app.setup.ts                # prefijo /api, pipe global, CORS, Swagger
   health.controller.ts        # GET /api/health
   config/
@@ -176,7 +189,8 @@ src/
       1794863403592-CreateTasks.ts
   tasks/
     task.entity.ts            # entidad Task (fase 2)
-    tasks.schemas.ts          # (fase 3) esquemas Zod
+    tasks.schemas.ts          # esquemas Zod de entrada/salida (fase 3)
+    tasks.schemas.spec.ts     # tests de los esquemas (fase 3)
     tasks.repository.ts       # (fase 4) acceso a datos
     tasks.service.ts          # (fase 4) reglas de negocio
     tasks.controller.ts       # (fase 4) endpoints
@@ -272,9 +286,10 @@ Las migraciones se generan con `--esm` porque el proyecto es ESM. El CLI se ejec
 Estado actual:
 
 - `src/config/env.spec.ts`: valores por defecto, coerción de `PORT` y `DB_AUTO_MIGRATE`, y error claro ante variables inválidas.
+- `src/tasks/tasks.schemas.spec.ts`: 15 tests de creación, actualización, query de listado, id y respuesta pública.
 - `test/health.e2e-spec.ts`: arranca la app real con SQLite en memoria, aplica las migraciones y verifica `GET /api/health` (incluida la consulta a la base de datos).
 
-Planificados en la Fase 5 (el requisito es un mínimo de 3 tests):
+En total, 18 tests unitarios y 1 e2e. Planificados en la Fase 5 (el requisito es un mínimo de 3 tests):
 
 **Unitarios** (`tasks.service.spec.ts`, repositorio mockeado con `vi.fn()`):
 
@@ -340,16 +355,18 @@ El arranque falla con un mensaje explícito si algún valor no es válido.
 
 **Nota de implementación:** las migraciones se importan de forma estática y se registran en el array `migrations` de `data-source-options.ts`. Un glob habría cargado el `.ts` con el loader nativo de Node durante Vitest, en lugar de transformarlo como el resto del proyecto.
 
-### Fase 3 — Validación y contrato
+### Fase 3 — Validación y contrato ✅
 
-- [ ] `taskStatusSchema` y tipos inferidos.
-- [ ] `createTaskSchema` (`z.strictObject`).
-- [ ] `updateTaskSchema` (parcial + al menos un campo).
-- [ ] `listTasksQuerySchema` (filtros, `page` y `limit` con coerción y límites).
-- [ ] `taskIdSchema` y esquema de respuesta pública.
-- [ ] Documentar códigos `400` y `404` esperados.
+- [x] `taskStatusSchema` y tipos inferidos.
+- [x] `createTaskSchema` (`z.strictObject`).
+- [x] `updateTaskSchema` (parcial + al menos un campo).
+- [x] `listTasksQuerySchema` (filtros, `page` y `limit` con coerción y límites).
+- [x] `taskIdSchema` y esquema de respuesta pública (`taskResponseSchema`, `paginatedTasksResponseSchema`).
+- [x] Documentar códigos `400` y `404` esperados.
 
-**Verificación:** body inválido y campos desconocidos devuelven `400` con mensajes por campo.
+**Verificación:** `npm test` valida los 15 casos de los esquemas (valores por defecto, recorte, fechas imposibles, estados inválidos, campos desconocidos, `PATCH` vacío, coerción de query e ids). La traducción a `400` con un mensaje por campo la hace `StandardSchemaValidationPipe` (formato `campo: mensaje`), y se comprobará por HTTP en los e2e de la Fase 5.
+
+**Nota de implementación:** en Zod 4 un `ZodDefault` ya cuenta como opcional, así que `createTaskSchema.partial()` conservaba el `status: 'pending'` y un PATCH sin estado habría reseteado tareas. Por eso los campos se declaran una vez y el `default` se aplica solo en el esquema de creación; hay un test que lo protege.
 
 ### Fase 4 — Dominio y endpoints
 
@@ -368,7 +385,7 @@ El arranque falla con un mensaje explícito si algún valor no es válido.
 - [ ] Configurar `test.env` en `vitest.config.e2e.ts`.
 - [ ] Cobertura mínima razonable del servicio y del controlador.
 
-**Verificación:** `npm test` y `npm run test:e2e` pasan; al menos 3 tests, objetivo ~14.
+**Verificación:** `npm test` y `npm run test:e2e` pasan; se suman a los 18 tests unitarios y al e2e de health ya existentes.
 
 ### Fase 6 — README, Docker y producción
 
@@ -492,6 +509,10 @@ Cero infraestructura, un archivo, transacciones ACID y suficiente rendimiento pa
 
 Un único esquema produce validación runtime y tipos estáticos, sin duplicar clases ni depender de `emitDecoratorMetadata` para validar. Nest 12 integra Standard Schema de forma nativa y Swagger genera el OpenAPI desde Zod 4.2+. El coste es que el ecosistema de decoradores de Swagger (`@ApiProperty`) no se usa en los DTOs; los esquemas se documentan solos.
 
+### `default` en creación y `partial()` en actualización
+
+En Zod 4, `ZodDefault` es opcional por sí mismo: `createTaskSchema.partial()` no quitaba el `default` de `status`, y un `PATCH` sin ese campo habría devuelto `{ status: 'pending' }` y reseteado la tarea. Para evitarlo, los campos se declaran una vez en `taskFields` y el `default` se aplica solo al esquema de creación; el de actualización marca cada campo como opcional explícitamente. Un test protege el caso.
+
 ### IDs enteros autoincrementales
 
 Simples, ordenables y eficientes en SQLite. Un UUID sería mejor si los ids se expusieran a terceros o se generaran en clientes; no es el caso. La migración sería un cambio de columna más ajuste de los esquemas.
@@ -532,7 +553,7 @@ No hay login ni permisos: cualquiera con acceso a la API puede operar. Es una de
 
 ## Próximos pasos
 
-1. Terminar las fases 3–6 del plan.
+1. Terminar las fases 4–6 del plan.
 2. Añadir autenticación y una tabla `users` si el responsable debe ser un usuario real.
 3. Añadir `GET /api/tasks/stats` y recordatorios por fecha límite (scheduler + email).
 4. CI (lint, build y tests en cada push) y publicación de la imagen Docker.
