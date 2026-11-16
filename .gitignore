@@ -57,6 +57,7 @@ pids
 
 # SQLite (base de datos local; las migraciones sí se versionan)
 /data
+/backups
 *.sqlite
 *.sqlite-journal
 *.sqlite-wal

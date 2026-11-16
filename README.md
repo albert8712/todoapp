@@ -16,7 +16,9 @@ El proyecto se ejecuta por fases. Este README es a la vez la documentación y el
 | 4 | Repositorio, servicio, controlador CRUD y filtros/paginación | ✅ Completada |
 | 4.1 | Ejemplos de peticiones de todos los endpoints en el README | ✅ Completada |
 | 5 | Tests unitarios y e2e | ✅ Completada |
-| 6 | README final, Docker y despliegue a producción | ⏳ Pendiente |
+| 6 | README final, despliegue a producción y operación | ✅ Completada |
+
+Todas las fases están completadas.
 
 **Ya implementado en la Fase 1**
 
@@ -72,7 +74,14 @@ El proyecto se ejecuta por fases. Este README es a la vez la documentación y el
 - La base se reinicia en `beforeEach` y se siembran tres tareas sin suponer ids fijos, así que los tests no comparten estado ni dependen del orden.
 - Total del proyecto: **29 tests unitarios y 13 e2e**, todos en verde.
 
-**Aún no implementado** (fase 6): Docker, despliegue a producción y cierre del README. Las secciones siguientes describen el contrato y el plan completos.
+**Ya implementado en la Fase 6**
+
+- README final: contrato, ejemplos, estructura, tests, variables, despliegue, operación y decisiones.
+- `deploy/todoapp.service`: unit de systemd con usuario sin privilegios y sistema de archivos de solo lectura salvo el directorio de datos.
+- `deploy/nginx.conf`: proxy inverso con TLS, redirección desde HTTP y `/docs` restringido.
+- `.env.production.example`: plantilla de entorno para el servidor.
+- `scripts/backup-sqlite.mjs` y `npm run db:backup`: copia en caliente con `integrity_check` y retención por días.
+- Verificación del flujo real de producción: migración con `DB_AUTO_MIGRATE=false`, arranque desde `dist/`, CRUD, backup y restauración.
 
 ---
 
@@ -92,7 +101,7 @@ El proyecto se ejecuta por fases. Este README es a la vez la documentación y el
 | `@nestjs/swagger` | 12 | OpenAPI generado desde los esquemas Zod y los decoradores del controlador. |
 | Vitest + Supertest | 4 / 7 | Tests rápidos con el runner que ya trae el proyecto. |
 | `tsx` | 4 | Ejecuta el CLI de TypeORM en un proyecto ESM sin `ts-node`. |
-| Docker | — | Imagen multi-stage reproducible con volumen persistente para SQLite. |
+| systemd + nginx | — | Arranque y reinicio del proceso, logs en journald y TLS por delante de Node. |
 
 ---
 
@@ -521,6 +530,13 @@ src/
 test/
   health.e2e-spec.ts          # e2e del health check
   tasks.e2e-spec.ts           # e2e del CRUD
+scripts/
+  backup-sqlite.mjs           # copia en caliente de la base
+deploy/
+  todoapp.service             # unit de systemd
+  nginx.conf                  # proxy inverso con TLS
+.env.example                  # entorno de desarrollo
+.env.production.example       # plantilla de entorno de producción
 ```
 
 ---
@@ -562,7 +578,7 @@ npm run start:dev
 | --- | --- |
 | `npm run start:dev` | Servidor en modo watch. |
 | `npm run build` | Compila a `dist/`. |
-| `npm run start:prod` | Ejecuta `dist/main`. |
+| `npm run start:prod` | Ejecuta `node dist/main.js` (requiere `npm run build`). |
 | `npm test` | Tests unitarios (`*.spec.ts`). |
 | `npm run test:e2e` | Tests e2e (`*.e2e-spec.ts`). |
 | `npm run test:cov` | Cobertura. |
@@ -572,6 +588,7 @@ npm run start:dev
 | `npm run db:migration:run` | Aplica migraciones pendientes. |
 | `npm run db:migration:revert` | Revierte la última migración. |
 | `npm run db:migration:show` | Lista migraciones y su estado. |
+| `npm run db:backup` | Copia en caliente la base a `./backups` con `integrity_check` y retención de 14 días. |
 
 ---
 
@@ -748,21 +765,31 @@ El arranque falla con un mensaje explícito si algún valor no es válido.
 
 **Nota de implementación:** los e2e reinician la tabla en `beforeEach` con `DELETE FROM "tasks"` sobre el `DataSource` de la app y siembran tres tareas; los ids se leen de las respuestas porque `AUTOINCREMENT` no se reinicia. Los unitarios usan `vi.useFakeTimers()` para fijar los timestamps y `cloneTask()` para que el repositorio mockeado nunca devuelva la misma instancia entre pruebas.
 
-### Fase 6 — README, Docker y producción
+### Fase 6 — README final y despliegue a producción ✅
 
-- [ ] Completar el README con la API final y las decisiones definitivas.
-- [ ] `Dockerfile` multi-stage (`node:26-alpine`, usuario no root, `HEALTHCHECK`).
-- [ ] `.dockerignore` y `docker-compose.yml` con volumen `todo-data:/app/data`.
-- [ ] Documentar backups, migraciones en release y límites de SQLite.
-- [ ] Verificar la imagen con `docker build` y `docker compose up`.
+- [x] Completar el README con la API final, la estructura y las decisiones definitivas.
+- [x] Documentar la instalación en un VPS con Node.js, systemd y nginx.
+- [x] `deploy/todoapp.service` con usuario sin privilegios y `ProtectSystem=strict`.
+- [x] `deploy/nginx.conf` con TLS, redirección desde HTTP y `/docs` restringido.
+- [x] Documentar backups, restauración, migraciones como paso de release y límites de SQLite.
+- [x] `scripts/backup-sqlite.mjs` con copia en caliente, `integrity_check` y retención.
+- [x] Verificar el flujo real: migrar, arrancar desde `dist/`, CRUD, backup y restaurar.
 
-**Verificación:** CRUD contra el contenedor usando un volumen persistente.
+**Verificación:** base nueva migrada con `DB_AUTO_MIGRATE=false`; app arrancada desde `dist/` en `NODE_ENV=production`; `GET /api/health` con `database: "up"`; CRUD correcto; backup verificado con `integrity_check`; restauración de la copia con la tarea intacta; retención eliminando copias antiguas. `npm test`, `npm run test:e2e`, `npm run build` y `npm run lint` en verde.
+
+**Decisión de alcance:** esta fase se limita al despliegue nativo con Node.js, systemd y nginx; los archivos de `deploy/` son plantillas para instalar en el servidor.
 
 ---
 
 ## Despliegue a producción
 
+Despliegue de referencia: **Node.js + systemd + nginx** sobre un VPS Linux, con SQLite en un archivo local.
+
+Requisitos del servidor: Linux con systemd, Node.js 22 o superior (probado con 26), nginx y un dominio con TLS. `better-sqlite3` se instala con binarios N-API; si el servidor no tiene binario para su plataforma, necesitará `build-essential` y Python para compilar.
+
 ### 1. Build y comprobaciones
+
+En la máquina de build o directamente en el servidor:
 
 ```bash
 npm ci
@@ -772,83 +799,228 @@ npm run test:e2e
 npm run build
 ```
 
-### 2. Docker
+El resultado es `dist/` más las dependencias de producción. Las migraciones compiladas viven en `dist/db/migrations/`.
 
-`Dockerfile` previsto (Fase 6):
-
-```dockerfile
-FROM node:26-alpine AS deps
-WORKDIR /app
-COPY package*.json .npmrc ./
-RUN npm ci
-
-FROM deps AS build
-COPY tsconfig*.json nest-cli.json ./
-COPY src ./src
-RUN npm run build
-
-FROM node:26-alpine AS runtime
-ENV NODE_ENV=production \
-    PORT=3000 \
-    DATABASE_URL=/app/data/todo.sqlite \
-    DB_AUTO_MIGRATE=false
-WORKDIR /app
-COPY package*.json .npmrc ./
-RUN npm ci --omit=dev && npm cache clean --force
-COPY --from=build /app/dist ./dist
-RUN mkdir -p /app/data && chown -R node:node /app
-USER node
-VOLUME ["/app/data"]
-EXPOSE 3000
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-CMD ["node", "dist/main.js"]
-```
-
-`docker-compose.yml` previsto:
-
-```yaml
-services:
-  api:
-    build: .
-    ports:
-      - '3000:3000'
-    environment:
-      NODE_ENV: production
-      DATABASE_URL: /app/data/todo.sqlite
-      DB_AUTO_MIGRATE: 'false'
-      CORS_ORIGIN: https://mi-frontend.example.com
-    volumes:
-      - todo-data:/app/data
-    restart: unless-stopped
-
-volumes:
-  todo-data:
-```
-
-Despliegue:
+### 2. Instalación en el servidor
 
 ```bash
-docker compose build
-docker compose run --rm api npm run db:migration:run   # migraciones como paso de release
-docker compose up -d
+# Usuario sin privilegios y directorios
+sudo useradd --system --home /opt/todoapp --shell /usr/sbin/nologin todoapp
+sudo mkdir -p /opt/todoapp /var/lib/todoapp /etc/todoapp
+sudo chown todoapp:todoapp /opt/todoapp /var/lib/todoapp
+
+# Código (git clone, rsync o el método de despliegue habitual)
+# /opt/todoapp debe contener package.json, .npmrc, dist/, scripts/ y deploy/
+
+cd /opt/todoapp
+sudo -u todoapp npm ci
+sudo -u todoapp npm run build
+sudo -u todoapp npm ci --omit=dev   # deja solo dependencias de producción
 ```
 
-### 3. Plataformas
+`better-sqlite3` es un módulo nativo: instálalo en el servidor (o en una máquina con la misma plataforma y arquitectura), no copies `node_modules` desde otro sistema operativo.
 
-- **VPS / Docker Compose:** la opción de referencia. Volumen persistente para `/app/data`, proxy inverso (Caddy, Traefik o Nginx) con TLS y el puerto de la API sin exponer públicamente.
-- **Fly.io / Railway / Render:** requieren un **volumen persistente** montado en `/app/data` y una sola instancia. Sin volumen, el archivo SQLite se pierde en cada despliegue.
-- **NestJS Mau (`nest deploy`):** opción gestionada; si se elige, revisar que el servicio tenga almacenamiento persistente, o cambiar a PostgreSQL.
-- **Alternativa serverless:** no recomendada con SQLite de archivo; usar PostgreSQL y cambiar el driver de TypeORM.
+### 3. Variables de entorno
 
-### 4. Operación
+```bash
+sudo install -m 600 .env.production.example /etc/todoapp/todoapp.env
+sudoedit /etc/todoapp/todoapp.env
+```
 
-- **Migraciones:** ejecutarlas como paso de release (`npm run db:migration:run`) con `DB_AUTO_MIGRATE=false`, o dejar `true` con una única instancia.
-- **Backups:** copiar el archivo SQLite con la API parada o usando `sqlite3 /app/data/todo.sqlite ".backup '/backups/todo-$(date +%F).sqlite'"`. Los archivos `-wal` y `-shm` forman parte del estado: no copiarlos por separado. Programar copias diarias y probar la restauración.
-- **Escalado:** SQLite admite un escritor y lectores concurrentes con WAL. Para varias réplicas o escritura intensiva, migrar a PostgreSQL: TypeORM solo cambia el driver y las migraciones necesitan revisión.
-- **Salud:** `GET /api/health` sirve para el `HEALTHCHECK` y para el balanceador.
-- **TLS y CORS:** terminar TLS en el proxy y restringir `CORS_ORIGIN` al dominio real.
-- **Observabilidad:** logs de Nest a stdout (los recoge el runtime). Opcionalmente, [NestJS Observe](https://observe.nestjs.com) con `npx @nestjs/observe link` para trazas, errores y métricas en producción.
+| Variable | Valor en producción | Nota |
+| --- | --- | --- |
+| `NODE_ENV` | `production` | Desactiva el modo desarrollo. |
+| `PORT` | `3000` | Solo accesible desde `127.0.0.1` a través de nginx. |
+| `DATABASE_URL` | `/var/lib/todoapp/todo.sqlite` | Debe coincidir con `ReadWritePaths` del unit. |
+| `DB_AUTO_MIGRATE` | `false` | Las migraciones se ejecutan como paso de release. |
+| `CORS_ORIGIN` | `https://app.example.com` | Nunca `*` en producción. |
+
+El archivo real no se commitea. El unit de systemd lo carga con `EnvironmentFile`, y el CLI de TypeORM lo lee si existe `/opt/todoapp/.env`:
+
+```bash
+sudo ln -s /etc/todoapp/todoapp.env /opt/todoapp/.env
+```
+
+Con una única instancia, `DB_AUTO_MIGRATE=true` también es seguro; con varias, debe quedarse en `false` y migrar una sola vez antes de arrancar.
+
+### 4. systemd
+
+El unit está en [`deploy/todoapp.service`](deploy/todoapp.service):
+
+```ini
+[Service]
+Type=simple
+User=todoapp
+Group=todoapp
+WorkingDirectory=/opt/todoapp
+EnvironmentFile=/etc/todoapp/todoapp.env
+ExecStart=/usr/bin/node /opt/todoapp/dist/main.js
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/todoapp
+```
+
+`ProtectSystem=strict` deja todo el sistema de archivos en solo lectura salvo `/var/lib/todoapp`; si cambias `DATABASE_URL`, actualiza también `ReadWritePaths`. El proceso atiende `SIGTERM` porque `setupApp()` habilita los shutdown hooks de Nest, así que systemd cierra la base de datos ordenadamente.
+
+Instalación:
+
+```bash
+sudo cp deploy/todoapp.service /etc/systemd/system/todoapp.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now todoapp
+sudo systemctl status todoapp
+```
+
+Logs:
+
+```bash
+journalctl -u todoapp -f
+journalctl -u todoapp --since "10 minutes ago"
+```
+
+La aplicación escribe en stdout/stderr, que systemd recoge en el journal.
+
+### 5. nginx y TLS
+
+El archivo [`deploy/nginx.conf`](deploy/nginx.conf) incluye redirección de HTTP a HTTPS, proxy a `127.0.0.1:3000`, cabeceras `X-Forwarded-*` y `/docs` restringido por IP.
+
+El certificado se obtiene **antes** de instalar la configuración con TLS (si no, `nginx -t` falla porque las rutas de Let's Encrypt aún no existen). El dominio debe apuntar al servidor y el puerto 80 estar abierto:
+
+```bash
+sudo apt install nginx certbot
+sudo certbot certonly --standalone \
+  --pre-hook "systemctl stop nginx" \
+  --post-hook "systemctl start nginx" \
+  -d api.example.com
+
+# Los hooks quedan guardados: certbot.timer renovará parando y arrancando nginx.
+sudo certbot renew --dry-run
+
+sudo cp deploy/nginx.conf /etc/nginx/sites-available/todoapp
+sudo ln -s /etc/nginx/sites-available/todoapp /etc/nginx/sites-enabled/todoapp
+sudo nginx -t
+sudo systemctl reload nginx
+sudo systemctl status certbot.timer
+```
+
+Antes de recargar, sustituye `api.example.com` y la IP de ejemplo de `/docs` en el archivo. El puerto `3000` no debe abrirse en el firewall: solo `80` y `443`.
+
+```bash
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw enable
+```
+
+### 6. Migraciones como paso de release
+
+Orden recomendado para cada versión:
+
+```bash
+# 1. Backup previo
+cd /opt/todoapp
+sudo -u todoapp node scripts/backup-sqlite.mjs \
+  --source /var/lib/todoapp/todo.sqlite --dir /var/backups/todoapp
+
+# 2. Código y build
+sudo -u todoapp npm ci
+sudo -u todoapp npm run build
+sudo -u todoapp npm ci --omit=dev
+
+# 3. Migrar antes de arrancar
+sudo -u todoapp npm run db:migration:run
+
+# 4. Reiniciar y comprobar
+sudo systemctl restart todoapp
+curl -fsS http://127.0.0.1:3000/api/health
+```
+
+`npm run db:migration:show` lista las migraciones aplicadas y pendientes. `npm run db:migration:revert` revierte la última, pero solo si la migración es reversible y aceptas la pérdida de datos asociada; la vía segura es restaurar el backup.
+
+Nunca ejecutes `db:migration:run` desde varias instancias a la vez: SQLite y la tabla `migrations` no están pensadas para migraciones concurrentes.
+
+### 7. Backups y restauración
+
+`npm run db:backup` usa la API `backup()` de `better-sqlite3`, que obtiene una instantánea coherente con la API en marcha y WAL activo. **No copies solo el archivo `.sqlite` con `cp` mientras el proceso corre**: las transacciones recientes pueden estar en `todo.sqlite-wal`.
+
+```bash
+cd /opt/todoapp
+sudo -u todoapp node scripts/backup-sqlite.mjs \
+  --source /var/lib/todoapp/todo.sqlite \
+  --dir /var/backups/todoapp \
+  --keep 14
+```
+
+El script:
+
+- crea `todo-<fecha>.sqlite` con la API en marcha;
+- abre la copia y ejecuta `PRAGMA integrity_check` y `SELECT COUNT(*) FROM tasks`;
+- elimina copias con más de `--keep` días (0 desactiva la retención);
+- sale con código 1 y un mensaje claro si el origen no existe o la copia está corrupta.
+
+Ejemplo de cron diario a las 03:15 (el directorio debe existir y pertenecer a `todoapp`):
+
+```bash
+sudo install -d -o todoapp -g todoapp /var/backups/todoapp
+```
+
+```cron
+15 3 * * * cd /opt/todoapp && sudo -u todoapp /usr/bin/node scripts/backup-sqlite.mjs --source /var/lib/todoapp/todo.sqlite --dir /var/backups/todoapp --keep 14 >> /var/log/todoapp-backup.log 2>&1
+```
+
+Un backup en el mismo disco no protege ante la pérdida del servidor: copia los archivos a otro lugar con `rsync`, `rclone` o el sistema de backups del proveedor.
+
+Restauración:
+
+```bash
+sudo systemctl stop todoapp
+
+# Conserva la base actual y sus archivos WAL por si la restauración no es la correcta
+sudo mkdir -p /var/lib/todoapp/antes
+sudo mv /var/lib/todoapp/todo.sqlite* /var/lib/todoapp/antes/
+
+sudo cp /var/backups/todoapp/todo-2026-11-16T03-15-00-000Z.sqlite \
+  /var/lib/todoapp/todo.sqlite
+sudo chown todoapp:todoapp /var/lib/todoapp/todo.sqlite
+
+sudo systemctl start todoapp
+curl -fsS http://127.0.0.1:3000/api/health
+```
+
+Después, comprueba el número de tareas y prueba un CRUD. Un backup que nunca se ha restaurado no se considera válido: haz una prueba de restauración periódica.
+
+### 8. Operación
+
+- **Salud:** `GET /api/health` comprueba el proceso, el uptime y `SELECT 1` contra SQLite. Devuelve `500` si la base no responde; úsalo en la monitorización y en el proxy.
+- **Apagado:** systemd envía `SIGTERM`; `enableShutdownHooks()` cierra Nest y TypeORM. `TimeoutStopSec=30` deja margen para terminar peticiones en curso.
+- **Un solo escritor:** SQLite admite lectores concurrentes con WAL, pero un único proceso escritor. Mantén **una instancia** de la API. Para varias réplicas o escritura intensiva, migra a PostgreSQL: TypeORM cambia de driver y las migraciones necesitan revisión.
+- **Disco local:** la base debe vivir en un disco local del servidor, no en NFS, SMB ni un volumen de red. WAL y los bloqueos no funcionan de forma fiable sobre red.
+- **Capacidad:** SQLite es suficiente para miles de tareas y lecturas concurrentes. El offset profundo de la paginación y el crecimiento del archivo son los primeros límites; `VACUUM` puntual tras borrados masivos recupera espacio.
+- **Observabilidad:** logs a stdout recogidos por journald. Opcionalmente, [NestJS Observe](https://observe.nestjs.com) con `npx @nestjs/observe link` para trazas, errores y métricas.
+- **Seguridad:** la API no tiene autenticación (ver decisiones). No la expongas a internet sin añadirla o sin colocarla detrás de una VPN, una red privada o un proxy con autenticación. Restringe `/docs`, limita el tamaño del cuerpo en nginx y valora `limit_req` para rate limiting.
+- **TLS y CORS:** termina TLS en nginx y fija `CORS_ORIGIN` al dominio real del frontend.
+
+### 9. Plataformas
+
+- **VPS con systemd + nginx:** opción de referencia, documentada arriba. Control total, coste bajo y backup a cargo del equipo.
+- **PaaS con disco persistente** (Fly.io, Railway, Render u similar): exige un volumen persistente montado en el directorio de datos, **una sola instancia** y un comando de release para `npm run db:migration:run`. Sin disco persistente, el archivo SQLite se pierde en cada despliegue.
+- **NestJS Mau (`nest deploy`):** opción gestionada; comprueba que el servicio tenga almacenamiento persistente o cambia a PostgreSQL.
+- **Serverless:** no recomendado con SQLite de archivo. Requiere PostgreSQL u otro servicio gestionado y cambiar el driver.
+
+### 10. Checklist de producción
+
+- [ ] `.env` de producción con `NODE_ENV=production`, `DB_AUTO_MIGRATE=false` y `CORS_ORIGIN` restringido.
+- [ ] Migraciones aplicadas como paso de release y backup previo.
+- [ ] Servicio `todoapp` habilitado en systemd y con `Restart=on-failure`.
+- [ ] nginx con TLS, puerto `3000` cerrado al exterior y `/docs` restringido.
+- [ ] Backup diario programado, copia fuera del servidor y restauración probada.
+- [ ] Monitorización de `/api/health` y de los logs del journal.
+- [ ] Autenticación añadida o API aislada en una red privada.
 
 ---
 
@@ -918,12 +1090,16 @@ El proyecto es ESM (`"type": "module"`, imports con `.js`). El CLI de TypeORM se
 
 No hay login ni permisos: cualquiera con acceso a la API puede operar. Es una decisión de alcance, no un olvido. Antes de exponerla a internet se añadiría `@nestjs/authentication`, autorización por propietario y rate limiting con `@nestjs/throttler`.
 
+### Despliegue con systemd y nginx
+
+La aplicación es un único proceso Node con SQLite en disco, así que un unit de systemd y nginx por delante cubren todo lo necesario: arranque, reinicio, logs en journald, TLS y proxy. Evita una capa extra de orquestación y mantiene el backup como una operación del sistema operativo. El coste es que el servidor se configura a mano (o con Ansible) y no hay una imagen inmutable; el unit compensa en parte con `ProtectSystem=strict`, `NoNewPrivileges` y un usuario sin shell. El backup usa la API de SQLite en lugar de copiar archivos, para que WAL no deje la copia incompleta.
+
 ---
 
 ## Próximos pasos
 
-1. Terminar la fase 6 del plan: `Dockerfile`, `.dockerignore`, `docker-compose.yml` y verificación del contenedor.
-2. Añadir autenticación y una tabla `users` si el responsable debe ser un usuario real.
-3. Añadir `GET /api/tasks/stats` y recordatorios por fecha límite (scheduler + email).
-4. CI (lint, build y tests en cada push) y publicación de la imagen Docker.
+1. Añadir autenticación y una tabla `users` si el responsable debe ser un usuario real; es el requisito previo para exponer la API a internet.
+2. Añadir `GET /api/tasks/stats` y recordatorios por fecha límite (scheduler + email).
+3. CI (lint, build y tests en cada push) y despliegue automatizado al VPS.
+4. Rate limiting con `@nestjs/throttler` y alertas sobre `/api/health`.
 5. Evaluar PostgreSQL si crece el volumen o se necesitan varias réplicas.
