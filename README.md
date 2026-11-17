@@ -143,6 +143,21 @@ Prefijo global: `/api`. Swagger UI: `/docs`. OpenAPI JSON: `/docs/json`.
 | `DELETE` | `/api/tasks/:id` | `204` sin cuerpo | `400`, `404` |
 | `GET` | `/api/health` | `200` + estado y comprobación de la base de datos | — |
 
+### Documentación interactiva (Swagger)
+
+`SwaggerModule.setup('docs', app, ...)` registra la UI y el JSON directamente en el adaptador HTTP, **fuera del prefijo global**:
+
+- `/docs` sirve la UI y `/docs/json` el documento OpenAPI 3.0, ambos con `200` mientras la petición llegue al proceso Node.
+- `/api/docs` devuelve `404`: no existe, aunque el resto de la API viva bajo `/api`. Ese prefijo solo se aplica a los controladores, no a Swagger.
+- En el despliegue documentado, `deploy/nginx.conf` restringe `/docs` por IP: desde cualquier otra dirección responde `403`. Es una decisión de seguridad, no un fallo de la aplicación; explica cómo habilitarla en [nginx y TLS](#5-nginx-y-tls).
+
+Comprobación rápida:
+
+```bash
+curl -I http://localhost:3000/docs        # 200 en local, 403 a través de nginx si tu IP no está autorizada
+curl -s http://localhost:3000/docs/json | head -c 40   # {"openapi":"3.0.0",...
+```
+
 ### Ejemplos de peticiones (Fase 4.1)
 
 Todos los ejemplos usan el prefijo global `/api`, el puerto por defecto `3000` y las tareas de ejemplo con ids `1`, `2` y `3`.
@@ -570,6 +585,8 @@ npm run start:dev
 - Swagger UI: <http://localhost:3000/docs>
 - OpenAPI JSON: <http://localhost:3000/docs/json>
 
+> `/docs` **no** lleva el prefijo `/api` (`/api/docs` responde `404`). En local responde `200`; en el despliegue con nginx responde `403` salvo desde la IP autorizada. Ver [Documentación interactiva](#documentación-interactiva-swagger).
+
 > **Nota sobre `.npmrc`:** TypeORM 1.x declara `better-sqlite3` `^12` como peer opcional, pero la v12 no publica binarios precompilados y en Windows con Node 26 exigiría compilar con Visual Studio Build Tools. El proyecto usa la v13, compatible a nivel de API y con binarios N-API, y `.npmrc` fija `legacy-peer-deps=true` para que `npm install` / `npm ci` funcionen sin intervención manual. Es la única dependencia con esta excepción.
 
 ### Scripts
@@ -700,7 +717,7 @@ El arranque falla con un mensaje explícito si algún valor no es válido.
 - [x] Tests de configuración y e2e del health check.
 - [x] Comprobar `build`, `lint`, `test` y `test:e2e`.
 
-**Verificación:** `npm run build`, `npm test`, `npm run test:e2e` y `npm run lint` pasan; `/api/health` y `/docs` responden.
+**Verificación:** `npm run build`, `npm test`, `npm run test:e2e` y `npm run lint` pasan; `/api/health` responde `200` y `/docs` devuelve `200` en el proceso Node (fuera del prefijo `/api`; ver [Documentación interactiva](#documentación-interactiva-swagger)). Los e2e cubren `/api/health`; `/docs` se comprueba a mano porque su respuesta depende del proxy del despliegue.
 
 ### Fase 2 — Persistencia y migraciones ✅
 
@@ -911,6 +928,15 @@ sudo systemctl status certbot.timer
 
 Antes de recargar, sustituye `api.example.com` y la IP de ejemplo de `/docs` en el archivo. El puerto `3000` no debe abrirse en el firewall: solo `80` y `443`.
 
+`location /docs` del archivo combina `allow 203.0.113.10` con `deny all`. Esa IP pertenece al rango de documentación (TEST-NET-3; 203.0.113.0/24) y no es la de ningún cliente real, así que **mientras no la sustituyas por la tuya, `/docs` devuelve `403` a todo el mundo, incluido tú**. No es un fallo de la aplicación: el proceso Node sigue sirviendo `/docs` en `127.0.0.1:3000`.
+
+```bash
+curl -I http://127.0.0.1:3000/docs        # 200: el proceso Node la sirve
+curl -I https://api.example.com/docs      # 403 si tu IP no está autorizada
+```
+
+Si no quieres exponerla ni mantener una lista de IPs, accede por túnel SSH (`ssh -L 3000:127.0.0.1:3000 user@servidor`) y abre <http://localhost:3000/docs>, o protégela con autenticación básica en nginx.
+
 ```bash
 sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
@@ -1017,7 +1043,7 @@ Después, comprueba el número de tareas y prueba un CRUD. Un backup que nunca s
 - [ ] `.env` de producción con `NODE_ENV=production`, `DB_AUTO_MIGRATE=false` y `CORS_ORIGIN` restringido.
 - [ ] Migraciones aplicadas como paso de release y backup previo.
 - [ ] Servicio `todoapp` habilitado en systemd y con `Restart=on-failure`.
-- [ ] nginx con TLS, puerto `3000` cerrado al exterior y `/docs` restringido.
+- [ ] nginx con TLS, puerto `3000` cerrado al exterior y `/docs` restringido: `403` desde internet y `200` por túnel SSH o desde la IP autorizada.
 - [ ] Backup diario programado, copia fuera del servidor y restauración probada.
 - [ ] Monitorización de `/api/health` y de los logs del journal.
 - [ ] Autenticación añadida o API aislada en una red privada.
